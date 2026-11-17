@@ -1,0 +1,11 @@
+services:
+  bugrelay:
+    build: .
+    init: true
+    ports:
+      - "127.0.0.1:4173:4173"
+    shm_size: 256m
+    volumes:
+      - reports:/app/data
+volumes:
+  reports:

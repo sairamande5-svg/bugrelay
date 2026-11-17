@@ -1,0 +1,5 @@
+# Future user study protocol
+
+Recruit testers and developers familiar with web applications. Use matched synthetic bugs with deterministic state, and predefine the intended failure for each. Assign testers to submit a written-only report for one fixture and a BugRelay report for a different fixture. Counterbalance method, fixture and order. Ask developers who did not write the reports to reproduce each bug and submit the evidence they used.
+
+Measure time from opening the report to the first confirmed reproduction, the proportion reproduced within a shared time limit, and whether the reproduction fails at the intended assertion. Log missing prerequisites, ambiguous targets and clarification requests. Record fixture, method, browser and prior familiarity. Report counts and paired differences with uncertainty and handle unfinished tasks as censored observations. Collect feedback after both attempts. Keep participant data out of BugRelay, collect consent and publish only aggregate results.
