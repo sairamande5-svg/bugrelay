@@ -11,7 +11,8 @@
     "start": "node apps/api/server.ts",
     "dev": "npm run build && npm start",
     "check": "tsc --noEmit && node --test benchmarks/unit.test.ts",
-    "benchmark": "npm run build && node benchmarks/run.ts"
+    "benchmark": "npm run build && node benchmarks/run.ts",
+    "demo": "playwright install chromium && npm run dev"
   },
   "dependencies": {
     "express": "^5.1.0",
