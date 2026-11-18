@@ -51,3 +51,14 @@ test('captured strings stay inside literals in the generated TypeScript AST', ()
   assert.equal(source.statements.length, 2);
   assert.equal(ts.transpileModule(generated.code, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2023 } }).diagnostics?.length, 0);
 });
+
+test('edit validation bounds the revision and accepts intentional assertion removal', async () => {
+  const { expectationEdit } = await import('../packages/report-schema/index.ts');
+  const edit = { revision: 0, expected: '  Checkout remains visible.  ', assertion: null };
+  assert.deepEqual(expectationEdit.parse(edit), { ...edit, expected: 'Checkout remains visible.' });
+  for (const revision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '0']) {
+    assert.equal(expectationEdit.safeParse({ ...edit, revision }).success, false);
+  }
+  assert.equal(expectationEdit.safeParse({ ...edit, expected: 'x'.repeat(1501) }).success, false);
+  assert.equal(expectationEdit.safeParse({ ...edit, status: 'Fix verified' }).success, false);
+});

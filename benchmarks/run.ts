@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { arch, cpus, platform, release, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { gzipSync } from 'node:zlib';
 import { chromium, expect } from '@playwright/test';
 import { generate } from '../packages/test-generator/index.ts';
+import { checkDashboard } from './dashboard.ts';
 import { fixtures } from './fixtures.ts';
 import type { Report } from '../packages/report-schema/index.ts';
 
@@ -14,6 +16,15 @@ const base = `http://127.0.0.1:${port}`;
 const repeats = Number(process.env.BENCHMARK_REPEATS ?? 3);
 assert.ok(Number.isInteger(repeats) && repeats > 0);
 const data = await mkdtemp(join(tmpdir(), 'bugrelay-bench-'));
+const legacy = new DatabaseSync(join(data, 'bugrelay.sqlite'));
+legacy.exec(`CREATE TABLE reports (
+  id TEXT PRIMARY KEY, project TEXT NOT NULL, created INTEGER NOT NULL,
+  payload TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT
+)`);
+const existingReport = { ...fixtures[0], title: 'Pre-upgrade smoke test' };
+legacy.prepare('INSERT INTO reports VALUES (?, ?, ?, ?, ?, NULL)')
+  .run('legacy-report', 'demo', Date.now(), JSON.stringify(existingReport), 'Test generated');
+legacy.close();
 const server = spawn(process.execPath, ['apps/api/server.ts'], {
   stdio: ['ignore', 'pipe', 'inherit'],
   env: { ...process.env, BUGRELAY_MODE: 'local', HOST: '127.0.0.1', PORT: String(port), BUGRELAY_DATA: data,
@@ -30,13 +41,27 @@ try {
     server.once('exit', code => reject(new Error(`Benchmark server exited with ${code}`)));
     server.once('error', reject);
   });
+  const legacyResponse = await fetch(endpoint + '/legacy-report', { headers });
+  assert.equal(legacyResponse.status, 200);
+  const upgraded = await legacyResponse.json();
+  assert.equal(upgraded.revision, 0);
+  assert.equal(upgraded.status, 'Test generated');
+  assert.deepEqual(upgraded.report, existingReport);
+  assert.equal((await fetch(endpoint + '/legacy-report', { headers, method: 'DELETE' })).status, 204);
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
-  const page = await browser.newPage({ acceptDownloads: true });
+  const page = await browser.newPage({ acceptDownloads: true, viewport: { width: 1360, height: 920 } });
+  const screenshots = process.env.BENCHMARK_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  let checkoutReport = '';
   let totalSteps = 0;
   let ambiguous = 0;
   let unsupported = 0;
   for (const [index, fixture] of fixtures.entries()) {
     await page.goto(base + '/buggy/?token=discarded#private');
+    if (index === 0 && screenshots) {
+      await expect(page.getByTestId('checkout')).toBeVisible();
+      await page.screenshot({ path: join(screenshots, 'demo.png'), type: 'png' });
+    }
     await page.getByRole('button', { name: 'Start recording' }).click();
     if (index === 0) {
       await page.getByTestId('depot').selectOption('west');
@@ -93,8 +118,15 @@ try {
       assert.ok(result.intended && result.buggy === 'failed' && result.fixed === 'passed', JSON.stringify(result));
     }
     seen.push({ title: fixture.title, evidence });
+    if (index === 0) checkoutReport = id;
   }
 
+  await page.goto(base + '/dashboard?id=' + checkoutReport);
+  if (screenshots) {
+    await expect(page.getByRole('heading', { name: 'Replay evidence' })).toBeVisible();
+    await page.screenshot({ path: join(screenshots, 'replay.png'), type: 'png' });
+  }
+  await checkDashboard(page, endpoint, checkoutReport);
   await page.goto(base);
   const diagnostics = await page.evaluate(async () => {
     const sdkModule = '/sdk.js';
@@ -178,7 +210,7 @@ try {
   console.log(JSON.stringify(results, null, 2));
 } finally {
   await browser?.close();
-  if (server.exitCode === null) {
+  if (server.pid && server.exitCode === null && server.signalCode === null) {
     const stopped = new Promise<void>(resolve => server.once('exit', () => resolve()));
     server.kill();
     await stopped;
