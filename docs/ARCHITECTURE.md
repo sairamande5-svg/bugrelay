@@ -19,6 +19,8 @@ Navigation events assert a path reached by preceding actions. For a bug that rea
 
 The dashboard starts each report at **Captured**. Generating a valid test produces **Test generated**. Drafts requiring review use **Needs review**. Local replay accepts only generated action and assertion sequences that match approved synthetic fixture code. It launches the identical test file in two Playwright projects, one per known loopback target. The buggy run must fail inside the named expected-outcome step to count as a reproduction. **Reproduction verified** records that result, and **Fix verified** additionally requires a passing fixed run. The bundled fixtures have deterministic initial state and require neither authentication nor network mocking.
 
+Developers can revise the expected behavior and assertion from the dashboard while keeping the original interaction timeline. Mutations require the current report revision and the dashboard credential. An edit that changes generated code clears prior evidence. A wording-only edit preserves evidence, and an in-flight replay cannot overwrite a newer revision.
+
 Developers run external tests in their own Playwright project. Set its base URL and arrange authentication, clean fixture data, route equivalence and app-specific prerequisites. The local API accepts no arbitrary replay targets, browser configuration or uploaded test source.
 
 ## Deployment boundary

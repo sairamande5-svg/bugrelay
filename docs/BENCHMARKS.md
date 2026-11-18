@@ -10,11 +10,11 @@ Measured November 17, 2026 in the Codex Linux x64 environment with Node.js 24.22
 | Fixtures with differing outcomes across repeated pairs | 0 / 4 fixtures, 3 pairs each |
 | Ambiguous locator | 1 / 10 retained steps |
 | Unsupported step | 1 / 10 retained steps |
-| Generation latency | 2.02 µs median, 3.71 µs p95 across 10,000 in-process samples |
+| Generation latency | 2.02 µs median, 3.19 µs p95 across 10,000 in-process samples |
 | Minified SDK bundle | 4,243 bytes raw, 2,021 bytes gzip |
-| Median added recording time | 6.25 µs per click across 20 paired samples |
+| Median added recording time | 5.00 µs per click across 20 paired samples |
 
-The denominator for generation includes a deliberate diagnostic report with a duplicate button name and an excluded password field. It produced a review-required draft and was rejected by the replay API. The four replayable tests were recorded through the browser UI, submitted, opened, generated and downloaded. The harness checked that the downloaded files exactly matched the fixture test source before rerunning each across both builds. It also verified version retention, URL and password exclusions, error redaction, request limits, project permissions, buffer bounds and report deletion.
+The denominator for generation includes a deliberate diagnostic report with a duplicate button name and an excluded password field. It produced a review-required draft and was rejected by the replay API. The four replayable tests were recorded through the browser UI, submitted, opened, generated and downloaded. The harness checked that the downloaded files exactly matched the fixture test source before rerunning each across both builds. It also verified version retention, URL and password exclusions, error redaction, request limits, project permissions, buffer bounds and report deletion. Dashboard checks additionally cover upgrading the previous SQLite schema, search and status filtering, edit authorization, stale revisions, and replay evidence invalidation.
 
 | Demo fixture | Buggy assertion | Fixed result |
 | --- | --- | --- |
@@ -23,6 +23,6 @@ The denominator for generation includes a deliberate diagnostic report with a du
 | Quantity edit | Expected $36.00, received $12.00 | Total became $36.00 |
 | Receipt | Expected /receipt, received /receipt-unavailable | Reached /receipt |
 
-Each buggy failure was recorded inside the named expected-outcome step. Playwright used fresh browser contexts and an 850 ms assertion timeout. The SDK overhead microbenchmark alternated the order of baseline and recording runs, discarded two warm-up pairs, and used 80 programmatic clicks on a unique test ID per sample. Baseline and recording batch medians were 0.10 ms and 0.60 ms. The timing excludes rendering a preview, upload, polling across navigation, and replay. Timer granularity, fixture size, DOM shape and shared-host load affect these measurements.
+Each buggy failure was recorded inside the named expected-outcome step. Playwright used fresh browser contexts and an 850 ms assertion timeout. The SDK overhead microbenchmark alternated the order of baseline and recording runs, discarded two warm-up pairs, and used 80 programmatic clicks on a unique test ID per sample. Baseline and recording batch medians were 0.10 ms and 0.50 ms. The timing excludes rendering a preview, upload, polling across navigation, and replay. Timer granularity, fixture size, DOM shape and shared-host load affect these measurements.
 
 The results cover deterministic synthetic fixtures in one browser. They provide a repeatable reference for changes. A larger cross-browser fixture set and the [user study protocol](USER_STUDY.md) would add coverage for real-world usability and performance.

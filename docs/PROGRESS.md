@@ -6,3 +6,10 @@
 4. **Release** — local Compose configuration, GitHub Actions, MIT license, contributor extension guide, browser benchmark and future user study protocol.
 
 The hosted product requires the deployment work described in the architecture page. SQLite and local credentials are intentional first-release choices.
+
+
+## Dashboard and onboarding update
+
+- Added title, application version and report ID search, plus status filtering.
+- Added expectation editing with stale-write detection and replay evidence tied to the tested revision.
+- Added Docker-free Windows launch instructions and Linux/Windows CI coverage for the browser workflow.
