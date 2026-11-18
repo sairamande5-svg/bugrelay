@@ -108,14 +108,21 @@ api.patch('/:id/expectation', (req, res) => {
     return;
   }
   const previous = view(row);
-  const updated = { ...previous.report, expected, assertion: assertion ?? undefined };
-  const output = generate(updated);
-  if (expected !== previous.report.expected || JSON.stringify(assertion) !== JSON.stringify(previous.report.assertion ?? null)) {
-    const testChanged = output.code !== generate(previous.report).code;
-    db.prepare('UPDATE reports SET payload = ?, revision = revision + 1, status = ?, evidence = ? WHERE id = ? AND project = ?')
-      .run(JSON.stringify(updated), testChanged ? 'Captured' : row.status, testChanged ? null : row.evidence, row.id, project);
+  if (expected === previous.report.expected && JSON.stringify(assertion) === JSON.stringify(previous.report.assertion ?? null)) {
+    res.json(previous);
+    return;
   }
-  res.json(view(find(row.id)!));
+  const updated = { ...previous.report, expected, assertion: assertion ?? undefined };
+  const testChanged = generate(updated).code !== generate(previous.report).code;
+  const saved = db.prepare(`UPDATE reports SET payload = ?, revision = revision + 1, status = ?, evidence = ?
+    WHERE id = ? AND project = ? AND revision = ? RETURNING *`)
+    .get(JSON.stringify(updated), testChanged ? 'Captured' : row.status, testChanged ? null : row.evidence,
+      row.id, project, revision) as Row | undefined;
+  if (!saved) {
+    res.status(409).json({ error: 'This report changed. Reload it before editing again.' });
+    return;
+  }
+  res.json(view(saved));
 });
 api.get('/:id/download/:kind', (req, res) => {
   const row = find(req.params.id);
