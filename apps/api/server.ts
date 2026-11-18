@@ -3,7 +3,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { MAX_PAYLOAD, report } from '../../packages/report-schema/index.ts';
+import { expectationEdit, MAX_PAYLOAD, report } from '../../packages/report-schema/index.ts';
 import type { Report } from '../../packages/report-schema/index.ts';
 import { generate, instructions } from '../../packages/test-generator/index.ts';
 import { fixtures } from '../../benchmarks/fixtures.ts';
@@ -25,10 +25,13 @@ const db = new DatabaseSync(resolve(data, 'bugrelay.sqlite'));
 db.exec(`PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY, project TEXT NOT NULL, created INTEGER NOT NULL,
-  payload TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT
+  payload TEXT NOT NULL, status TEXT NOT NULL, evidence TEXT, revision INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS reports_project_created ON reports(project, created);`);
-type Row = { id: string; project: string; created: number; payload: string; status: string; evidence: string | null };
+if (!db.prepare('PRAGMA table_info(reports)').all().some(column => column.name === 'revision')) {
+  db.exec('ALTER TABLE reports ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+}
+type Row = { revision: number; id: string; project: string; created: number; payload: string; status: string; evidence: string | null };
 const retention = 30 * 86400000;
 const expire = () => db.prepare('DELETE FROM reports WHERE created < ?').run(Date.now() - retention);
 expire();
@@ -74,11 +77,11 @@ api.post('/', (req, res) => {
     return;
   }
   const id = randomUUID();
-  db.prepare('INSERT INTO reports VALUES (?, ?, ?, ?, ?, NULL)').run(id, project, Date.now(), JSON.stringify(parsed.data), 'Captured');
+  db.prepare('INSERT INTO reports (id, project, created, payload, status) VALUES (?, ?, ?, ?, ?)').run(id, project, Date.now(), JSON.stringify(parsed.data), 'Captured');
   res.status(201).json({ id });
 });
 function view(row: Row) {
-  return { id: row.id, created: row.created, status: row.status, report: JSON.parse(row.payload) as Report,
+  return { id: row.id, created: row.created, revision: row.revision, status: row.status, report: JSON.parse(row.payload) as Report,
     evidence: row.evidence ? JSON.parse(row.evidence) : null };
 }
 api.get('/', (_req, res) => {
@@ -90,6 +93,29 @@ api.get('/:id', (req, res) => {
   const row = find(req.params.id);
   if (!row) { res.sendStatus(404); return; }
   res.json(view(row));
+});
+api.patch('/:id/expectation', (req, res) => {
+  const edit = expectationEdit.safeParse(req.body);
+  if (!edit.success) {
+    res.status(400).json({ error: 'Provide a valid expected outcome, assertion and report revision.' });
+    return;
+  }
+  const row = find(req.params.id);
+  if (!row) { res.sendStatus(404); return; }
+  const { revision, expected, assertion } = edit.data;
+  if (row.revision !== revision) {
+    res.status(409).json({ error: 'This report changed. Reload it before editing again.' });
+    return;
+  }
+  const previous = view(row);
+  const updated = { ...previous.report, expected, assertion: assertion ?? undefined };
+  const output = generate(updated);
+  if (expected !== previous.report.expected || JSON.stringify(assertion) !== JSON.stringify(previous.report.assertion ?? null)) {
+    const testChanged = output.code !== generate(previous.report).code;
+    db.prepare('UPDATE reports SET payload = ?, revision = revision + 1, status = ?, evidence = ? WHERE id = ? AND project = ?')
+      .run(JSON.stringify(updated), testChanged ? 'Captured' : row.status, testChanged ? null : row.evidence, row.id, project);
+  }
+  res.json(view(find(row.id)!));
 });
 api.get('/:id/download/:kind', (req, res) => {
   const row = find(req.params.id);
@@ -124,8 +150,12 @@ api.post('/:id/verify', async (req, res) => {
     const result = await replay(output.code, `http://127.0.0.1:${port}`);
     const evidence = { ...result, at: Date.now() };
     const status = result.intended ? (result.fixed === 'passed' ? 'Fix verified' : 'Reproduction verified') : 'Needs review';
-    db.prepare('UPDATE reports SET status = ?, evidence = ? WHERE id = ? AND project = ?')
-      .run(status, JSON.stringify(evidence), row.id, project);
+    const saved = db.prepare('UPDATE reports SET status = ?, evidence = ? WHERE id = ? AND project = ? AND revision = ?')
+      .run(status, JSON.stringify(evidence), row.id, project, row.revision);
+    if (!saved.changes) {
+      res.status(409).json({ error: 'The report changed during replay. Reload it before running again.' });
+      return;
+    }
     res.json(evidence);
   } catch (error) {
     console.error('Demo replay failed:', error);

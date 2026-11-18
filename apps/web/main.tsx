@@ -2,14 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBugRelay } from '../../packages/sdk/index.ts';
 import { assertion as assertionSchema } from '../../packages/report-schema/index.ts';
-import type { Assertion, Locator, Recording, Report } from '../../packages/report-schema/index.ts';
+import type { Assertion, Recording, Report } from '../../packages/report-schema/index.ts';
 import { fixtures } from '../../benchmarks/fixtures.ts';
 import './styles.css';
 
 type Config = { project: string; ingestionKey: string; appVersion: string };
 type Summary = { id: string; title: string; status: string; appVersion?: string; created: number };
 type Evidence = { buggy: string; fixed: string; intended: boolean; assertionFailure: string; at: number };
-type Detail = { id: string; created: number; status: string; report: Report; evidence: Evidence | null };
+type Detail = { id: string; revision: number; created: number; status: string; report: Report; evidence: Evidence | null };
 const variant = location.pathname.split('/')[1] === 'fixed' ? 'fixed' : 'buggy';
 const relativePath = () => location.pathname.replace(/^\/(buggy|fixed)(?=\/|$)/, '') || '/';
 const examples = [
@@ -36,6 +36,49 @@ function Header({ dashboard }: { dashboard: boolean }) {
     <span className="environment"><span />Local development</span>
   </div></header>;
 }
+type Expectation = { type: string; kind: string; target: string; role: string; value: string };
+const emptyExpectation: Expectation = { type: '', kind: 'testId', target: '', role: 'button', value: '' };
+
+function toExpectation(assertion?: Assertion): Expectation {
+  if (!assertion) return emptyExpectation;
+  if (assertion.type === 'url') return { ...emptyExpectation, type: 'url', value: assertion.path };
+  const { locator } = assertion;
+  return {
+    type: assertion.type, kind: locator.kind,
+    target: locator.kind === 'role' ? locator.name : locator.value,
+    role: locator.kind === 'role' ? locator.role : 'button',
+    value: assertion.type === 'text' ? assertion.value : ''
+  };
+}
+
+function parseExpectation({ type, kind, role, target, value }: Expectation): Assertion | undefined {
+  if (!type) return;
+  const locator = kind === 'role' ? { kind, role, name: target } : { kind, value: target };
+  const parsed = assertionSchema.safeParse(type === 'url' ? { type, path: value } : { type, locator, value });
+  if (!parsed.success) throw new Error('Enter a valid expected result and locator. URL paths must begin with /.');
+  return parsed.data;
+}
+
+function AssertionFields({ expectation, setExpectation }: { expectation: Expectation; setExpectation: (value: Expectation) => void }) {
+  return (
+    <fieldset><legend>Playwright assertion</legend>
+      <label>Expectation<select value={expectation.type} onChange={event => setExpectation({ ...expectation, type: event.target.value })}>
+        <option value="">Choose an assertion</option><option value="visible">Element is visible</option><option value="text">Element has text</option><option value="url">Page has URL path</option>
+      </select></label>
+      {expectation.type && expectation.type !== 'url' && <>
+        <label>Locator strategy<select value={expectation.kind} onChange={event => setExpectation({ ...expectation, kind: event.target.value })}>
+          <option value="testId">Test ID</option><option value="label">Label</option><option value="role">Accessible role and name</option>
+        </select></label>
+        {expectation.kind === 'role' && <label>Role<select value={expectation.role} onChange={event => setExpectation({ ...expectation, role: event.target.value })}>
+          {['button', 'link', 'textbox', 'combobox', 'heading', 'status', 'alert'].map(role => <option key={role}>{role}</option>)}
+        </select></label>}
+        <label>{expectation.kind === 'role' ? 'Accessible name' : 'Locator value'}<input required maxLength={160} value={expectation.target} onChange={event => setExpectation({ ...expectation, target: event.target.value })} /></label>
+      </>}
+      {['text', 'url'].includes(expectation.type) && <label>{expectation.type === 'url' ? 'Expected path' : 'Expected text'}
+        <input required maxLength={500} value={expectation.value} onChange={event => setExpectation({ ...expectation, value: event.target.value })} /></label>}
+    </fieldset>
+  );
+}
 function Demo({ config }: { config: Config }) {
   const [sdk] = useState(() => createBugRelay({ ...config, endpoint: location.origin, path: relativePath }));
   const [page, setPage] = useState(relativePath);
@@ -50,7 +93,7 @@ function Demo({ config }: { config: Config }) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [details, setDetails] = useState({ title: '', observed: '', expected: '' });
-  const [expectation, setExpectation] = useState({ type: '', kind: 'testId', target: '', role: 'button', value: '' });
+  const [expectation, setExpectation] = useState(emptyExpectation);
   useEffect(() => {
     const update = () => setPage(relativePath());
     window.addEventListener('popstate', update);
@@ -65,27 +108,15 @@ function Demo({ config }: { config: Config }) {
   function example(index: number) {
     const preset = fixtures[index];
     setDetails({ title: preset.title, expected: preset.expected, observed: preset.observed });
-    const assertion = preset.assertion;
-    if (assertion?.type === 'url') setExpectation({ type: 'url', kind: 'testId', target: '', role: 'button', value: assertion.path });
-    else if (assertion && assertion.locator.kind === 'testId') {
-      setExpectation({ type: assertion.type, kind: 'testId', target: assertion.locator.value, role: 'button', value: 'value' in assertion ? assertion.value : '' });
-    }
+    setExpectation(toExpectation(preset.assertion));
   }
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!recording) return;
     setError('');
-    const { type, kind, role, target, value } = expectation;
-    let assertion: Assertion | undefined;
-    if (type) {
-      const locator = kind === 'role' ? { kind, role, name: target } : { kind, value: target };
-      const parsed = assertionSchema.safeParse(type === 'url' ? { type, path: value } : { type, locator, value });
-      if (!parsed.success) { setError('Enter a valid expected result and locator. URL paths must begin with /.'); return; }
-      assertion = parsed.data;
-    }
     setSubmitting(true);
     try {
-      const response = await sdk.submit({ ...details, assertion }, recording);
+      const response = await sdk.submit({ ...details, assertion: parseExpectation(expectation) }, recording);
       setResult(response.id);
     } catch (error) { setError((error as Error).message); }
     finally { setSubmitting(false); }
@@ -151,22 +182,7 @@ function Demo({ config }: { config: Config }) {
               {key === 'title' ? <input required maxLength={160} value={details[key]} onChange={event => setDetails({ ...details, [key]: event.target.value })} /> :
                 <textarea required maxLength={1500} value={details[key]} onChange={event => setDetails({ ...details, [key]: event.target.value })} />}
             </label>)}
-            <fieldset><legend>Playwright assertion</legend>
-              <label>Expectation<select value={expectation.type} onChange={event => setExpectation({ ...expectation, type: event.target.value })}>
-                <option value="">Choose an assertion</option><option value="visible">Element is visible</option><option value="text">Element has text</option><option value="url">Page has URL path</option>
-              </select></label>
-              {expectation.type && expectation.type !== 'url' && <>
-                <label>Locator strategy<select value={expectation.kind} onChange={event => setExpectation({ ...expectation, kind: event.target.value })}>
-                  <option value="testId">Test ID</option><option value="label">Label</option><option value="role">Accessible role and name</option>
-                </select></label>
-                {expectation.kind === 'role' && <label>Role<select value={expectation.role} onChange={event => setExpectation({ ...expectation, role: event.target.value })}>
-                  {['button', 'link', 'textbox', 'combobox', 'heading', 'status', 'alert'].map(role => <option key={role}>{role}</option>)}
-                </select></label>}
-                <label>{expectation.kind === 'role' ? 'Accessible name' : 'Locator value'}<input required maxLength={160} value={expectation.target} onChange={event => setExpectation({ ...expectation, target: event.target.value })} /></label>
-              </>}
-              {['text', 'url'].includes(expectation.type) && <label>{expectation.type === 'url' ? 'Expected path' : 'Expected text'}
-                <input required maxLength={500} value={expectation.value} onChange={event => setExpectation({ ...expectation, value: event.target.value })} /></label>}
-            </fieldset>
+            <AssertionFields expectation={expectation} setExpectation={setExpectation} />
             <button className="primary" type="submit" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit report'}</button>
           </form>}
           {error && <p className="error" role="alert">{error}</p>}
@@ -190,9 +206,18 @@ function Dashboard({ config }: { config: Config }) {
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [editor, setEditor] = useState<{ expected: string; expectation: Expectation }>();
+  const [notice, setNotice] = useState('');
+  const query = search.trim().toLowerCase();
+  const visibleRows = rows.filter(row => (!status || status === row.status) &&
+    (!query || [row.title, row.appVersion, row.id].some(value => value?.toLowerCase().includes(query))));
   const api = `/api/projects/${encodeURIComponent(config.project)}/reports`;
-  async function request(path = '', method = 'GET') {
-    const response = await fetch(api + path, { method, headers: { authorization: `Bearer ${credential}` } });
+  async function request(path = '', method = 'GET', payload?: object) {
+    const headers = new Headers({ authorization: `Bearer ${credential}` });
+    if (payload) headers.set('content-type', 'application/json');
+    const response = await fetch(api + path, { method, headers, body: payload ? JSON.stringify(payload) : undefined });
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
       throw new Error(result.error ?? `Request failed (${response.status}).`);
@@ -204,7 +229,7 @@ function Dashboard({ config }: { config: Config }) {
     setDetail(id ? await (await request('/' + encodeURIComponent(id))).json() : undefined);
   }
   useEffect(() => {
-    setError(''); setRows([]); setDetail(undefined); setGeneration(undefined); setConfirmDelete(false);
+    setError(''); setRows([]); setDetail(undefined); setGeneration(undefined); setConfirmDelete(false); setEditor(undefined); setNotice('');
     let current = true;
     Promise.all([request().then(res => res.json()), id ? request('/' + encodeURIComponent(id)).then(res => res.json()) : undefined])
       .then(([items, report]) => { if (current) { setRows(items); setDetail(report); } })
@@ -223,6 +248,19 @@ function Dashboard({ config }: { config: Config }) {
         if (action === 'generate') setGeneration(result);
         await load();
       }
+    } catch (error) { setError((error as Error).message); }
+    finally { setWorking(false); }
+  }
+  async function saveExpectation(event: React.FormEvent) {
+    event.preventDefault();
+    if (!detail || !editor) return;
+    setWorking(true); setError(''); setNotice('');
+    try {
+      await request('/' + encodeURIComponent(detail.id) + '/expectation', 'PATCH', {
+        revision: detail.revision, expected: editor.expected, assertion: parseExpectation(editor.expectation) ?? null
+      });
+      await load();
+      setGeneration(undefined); setEditor(undefined); setNotice('Expected outcome saved.');
     } catch (error) { setError((error as Error).message); }
     finally { setWorking(false); }
   }
@@ -256,22 +294,47 @@ const reviewed = relay.stop(); // preview and allow removals
 // await relay.submit({ title, observed, expected, assertion }, reviewed);`}</pre>
       <p>Opt in selected synthetic or non-sensitive text fields and dropdowns with <code>data-bugrelay-allow</code>.</p>
       <form className="field-row" onSubmit={event => { event.preventDefault(); setCredential(key); }}>
-        <label>Dashboard credential<input type="password" value={key} onChange={event => setKey(event.target.value)} /></label><button>Unlock reports</button>
+        <label>Dashboard credential<input type="password" value={key} onChange={event => setKey(event.target.value)} /></label><button disabled={working}>Unlock reports</button>
       </form>
     </details>
     {error && <p role="alert" className="error">{error}</p>}
     <div className="workspace dashboard-grid">
       <section className="panel report-list"><div className="panel-top"><h2>Reports</h2><small>{rows.length} total</small></div>
-        {rows.length ? rows.map(row => <button type="button" disabled={working} key={row.id} className={`report-row ${id === row.id ? 'selected' : ''}`} onClick={() => select(row.id)}>
+        <div className="report-filters">
+          <label>Search reports<input type="search" placeholder="Title, version or report ID" value={search} onChange={event => setSearch(event.target.value)} /></label>
+          <label>Status<select value={status} onChange={event => setStatus(event.target.value)}>
+            <option value="">All statuses</option>
+            {['Captured', 'Needs review', 'Test generated', 'Reproduction verified', 'Fix verified'].map(value => <option key={value}>{value}</option>)}
+          </select></label>
+          <small role="status">{visibleRows.length} of {rows.length} reports</small>
+        </div>
+        {visibleRows.length ? visibleRows.map(row => <button type="button" disabled={working} key={row.id} className={`report-row ${id === row.id ? 'selected' : ''}`} onClick={() => select(row.id)}>
           <strong>{row.title}</strong><span className="badge">{row.status}</span><small>{row.appVersion ?? 'Version unspecified'} · {format(row.created)}</small>
-        </button>) : <p className="empty">No reports yet. Submit a recording from the demo workspace.</p>}
+        </button>) : <p className="empty">{rows.length ? 'No reports match these filters.' : 'No reports yet. Submit a recording from the demo workspace.'}</p>}
       </section>
       <section className="panel report-detail">
         {detail ? <><div className="panel-top"><div><h2>{detail.report.title}</h2><small>{format(detail.created)}</small></div><span className="badge">{detail.status}</span></div>
           <div className="detail-body">
+            {detail.evidence && <section className="replay-evidence" aria-labelledby="replay-evidence-heading">
+              <div className="evidence-heading"><h3 id="replay-evidence-heading">Replay evidence</h3><time dateTime={new Date(detail.evidence.at).toISOString()}>{format(detail.evidence.at)}</time></div>
+              <div className="evidence-results">
+                <div><span>Buggy build</span><strong>{detail.evidence.intended ? 'Expected assertion failed' : detail.evidence.buggy}</strong></div>
+                <div><span>Fixed build</span><strong>{detail.evidence.fixed === 'passed' ? 'Same test passed' : detail.evidence.fixed}</strong></div>
+              </div>
+              {detail.evidence.assertionFailure && <details><summary>View assertion output</summary><pre>{detail.evidence.assertionFailure}</pre></details>}
+            </section>}
             <h3>Observed behavior</h3><p>{detail.report.observed}</p>
             <h3>Expected behavior</h3><p>{detail.report.expected}</p>
             {detail.report.assertion ? <pre>{JSON.stringify(detail.report.assertion, null, 2)}</pre> : <p>No assertion provided.</p>}
+            {notice && <p role="status">{notice}</p>}
+            {editor ? <form className="expectation-editor" onSubmit={saveExpectation}>
+              <label>Expected outcome<textarea value={editor.expected} required maxLength={1500} onChange={event => setEditor({ ...editor, expected: event.target.value })} /></label>
+              <AssertionFields expectation={editor.expectation} setExpectation={expectation => setEditor({ ...editor, expectation })} />
+              <div className="actions"><button className="primary" disabled={working}>Save expected outcome</button>
+                <button type="button" disabled={working} onClick={() => setEditor(undefined)}>Cancel edit</button></div>
+            </form> : <button disabled={working} onClick={() => {
+              setNotice(''); setEditor({ expected: detail.report.expected, expectation: toExpectation(detail.report.assertion) });
+            }}>Edit expected outcome</button>}
             <h3>Interaction timeline</h3><p>Start page <code>{detail.report.startPath}</code></p>
             {detail.report.truncated && <p>The recording buffer was truncated.</p>}
             {detail.report.events.length ? <ol className="timeline">{detail.report.events.map((entry, index) => <li key={index}>
@@ -280,16 +343,13 @@ const reviewed = relay.stop(); // preview and allow removals
             <h3>Console and browser errors</h3>
             {detail.report.logs.length ? <ul>{detail.report.logs.map((entry, index) => <li key={index}>{entry.kind} · {entry.path} · {format(entry.at)}</li>)}</ul> : <p>No error signals retained.</p>}
             <div className="actions">
-              <button className="primary" disabled={working} onClick={() => run('generate')}>Generate test</button>
-              <button disabled={working} onClick={() => run('verify')}>{working ? 'Working…' : 'Replay approved demo test'}</button>
+              <button className="primary" disabled={working || Boolean(editor)} onClick={() => run('generate')}>Generate test</button>
+              <button disabled={working || Boolean(editor)} onClick={() => run('verify')}>{working ? 'Working…' : 'Replay approved demo test'}</button>
               <button onClick={() => download('test', 'bugrelay.spec.ts')}>Download test</button>
               <button onClick={() => download('report', 'bugrelay.json')}>Download JSON</button>
               <button onClick={() => download('readme', 'README.md')}>Replay README</button>
             </div>
             {generation && <><h3>Generated Playwright test</h3>{generation.warnings.length > 0 && <ul>{generation.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>}<pre>{generation.code}</pre></>}
-            {detail.evidence && <><h3>Replay evidence</h3><p>Buggy build {detail.evidence.buggy} · Fixed build {detail.evidence.fixed} · {format(detail.evidence.at)}</p>
-              <p>{detail.evidence.intended ? 'The buggy build failed the expected-outcome assertion.' : 'The expected-outcome assertion did not reproduce the bug.'}</p>
-              {detail.evidence.assertionFailure && <pre>{detail.evidence.assertionFailure}</pre>}</>}
             <div className="actions">{confirmDelete ? <><button className="stop" disabled={working} onClick={() => run('delete')}>Confirm deletion</button><button onClick={() => setConfirmDelete(false)}>Cancel</button></> :
               <button disabled={working} onClick={() => setConfirmDelete(true)}>Delete report</button>}</div>
           </div></> : <p className="empty">Select a report to view its timeline and generated test.</p>}

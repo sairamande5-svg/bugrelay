@@ -32,6 +32,11 @@ export const report = z.object({
   logs: z.array(z.object({ ...context, kind: z.enum(['console.error', 'window.error', 'unhandledrejection']) })).max(MAX_LOGS),
   truncated: z.boolean()
 });
+export const expectationEdit = z.strictObject({
+  revision: z.number().int().nonnegative(),
+  expected: report.shape.expected,
+  assertion: assertion.nullable()
+});
 export type Report = z.infer<typeof report>;
 export type Locator = z.infer<typeof locator>;
 export type Interaction = z.infer<typeof interaction>;
